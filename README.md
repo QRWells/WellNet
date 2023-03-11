@@ -1,6 +1,6 @@
 # WellNet
 
-A network library written in C#.
+A network library written in C#. Work in progress now.
 
 ## License
 

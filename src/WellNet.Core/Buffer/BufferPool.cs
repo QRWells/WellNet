@@ -7,15 +7,15 @@ public sealed class BufferPool
 {
     private readonly ByteBuffer[] _buffers;
     private readonly uint _bufferSize;
+    private readonly Memory<byte> _underlyingBuffer;
 
     private readonly bool[] _used;
-    private Memory<byte> _underlyingMemory;
 
     public BufferPool(uint totalSize, uint bufferSize)
     {
         totalSize = BitOperations.RoundUpToPowerOf2(totalSize);
         bufferSize = BitOperations.RoundUpToPowerOf2(bufferSize);
-        _underlyingMemory = new byte[totalSize];
+        _underlyingBuffer = new byte[totalSize];
         _bufferSize = bufferSize;
 
         var count = totalSize / bufferSize;
@@ -24,13 +24,13 @@ public sealed class BufferPool
 
         for (var i = 0; i < count; i++)
         {
-            var buffer = new ByteBuffer(this, i,
-                _underlyingMemory.Slice(i * (int)bufferSize, (int)bufferSize));
+            var slice = _underlyingBuffer.Slice((int)(i * bufferSize), (int)bufferSize);
+            var buffer = new ByteBuffer(this, i, slice);
             _buffers[i] = buffer;
         }
     }
 
-    public ByteBuffer Get()
+    public ByteBuffer Rent()
     {
         for (var i = 0; i < _used.Length; i++)
         {
@@ -39,7 +39,8 @@ public sealed class BufferPool
             return _buffers[i];
         }
 
-        return null; // todo: expand pool
+        // Allocate a new buffer, and discard it when it is returned
+        return new ByteBuffer(this, -1, new byte[_bufferSize]);
     }
 
     public void Return(ByteBuffer item, bool clear = true)
@@ -47,7 +48,14 @@ public sealed class BufferPool
         // Not a pooled buffer
         if (item.Pool == null) return;
         // Not from this pool, delegate to the correct pool
-        if (item.Pool != this) item.Release(clear);
+        if (item.Pool != this)
+        {
+            item.Release(clear);
+            return;
+        }
+
+        // Not a pooled buffer
+        if (item.Index == -1) return;
 
         if (clear) item.Clear();
         _used[item.Index] = false;
@@ -55,7 +63,7 @@ public sealed class BufferPool
 
     public void SetBuffer(SocketAsyncEventArgs readWriteEventArg)
     {
-        var buffer = Get();
-        readWriteEventArg.SetBuffer(buffer.Buffer);
+        var buffer = Rent();
+        readWriteEventArg.SetBuffer(buffer.Memory);
     }
 }
