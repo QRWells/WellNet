@@ -6,122 +6,87 @@ using Serilog;
 
 namespace QRWells.WellNet.Core.Tcp;
 
-public class TcpServer : IDisposable
+public sealed class TcpServer : IDisposable
 {
-    private readonly SocketAsyncEventArgs _acceptSocketAsyncEventArgs = new();
-    private readonly int _backlog = 100;
     private readonly BufferPool _bufferPool;
     private readonly ConcurrentDictionary<Guid, TcpConnection> _connections = new();
+    private readonly Guid _id = Guid.NewGuid();
+    private readonly CancellationTokenSource _listenCancel = new();
+    private readonly Socket _listener;
     private readonly ILogger _logger = Log.ForContext<TcpServer>();
 
-    /// <summary>
-    ///     the maximum number of connections to handle simultaneously
-    /// </summary>
-    private readonly int _maxConnections;
+    private bool _listening;
 
-    private Socket _listenSocket; // the socket used to listen for incoming connection requests
-    private int _receiveBufferSize; // buffer size to use for each socket I/O operation
-    private int _totalBytesRead; // counter of the total # bytes received by the server
-
-    public TcpServer() : this(8192)
+    public TcpServer(int port) : this(new IPEndPoint(IPAddress.Any, port))
     {
     }
 
-    // Create an uninitialized server instance.
-    // To start the server listening for connection requests
-    // call the Init method followed by Start method
-    //
-    // <param name="numConnections">the maximum number of connections the sample is designed to handle simultaneously</param>
-    // <param name="receiveBufferSize">buffer size to use for each socket I/O operation</param>
-    internal TcpServer(int receiveBufferSize)
+    public TcpServer(EndPoint endPoint)
     {
-        _receiveBufferSize = receiveBufferSize;
+        _bufferPool = new BufferPool(1024 * 1024, 8192);
+        _listener = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        _listener.Bind(endPoint);
+        _listener.Listen(100);
 
-        _bufferPool = new BufferPool((uint)(receiveBufferSize * 16 * 2), (uint)receiveBufferSize);
+        _logger.Information("Server {Id} listening on {EndPoint}", _id, endPoint);
     }
-
-    public Action<TcpConnection, Memory<byte>> DataReceived { get; set; } = (_, _) => { };
 
     public void Dispose()
     {
-        _listenSocket.Dispose();
+        _listening = false;
+        _listenCancel.Dispose();
+        _listener.Dispose();
 
-        GC.SuppressFinalize(this);
+        foreach (var connection in _connections.Values) connection.Dispose();
     }
 
-    public event EventHandler? Started;
-    public event EventHandler? Stopped;
-
-    public event EventHandler<TcpConnection>? Connecting;
-    public event EventHandler<TcpConnection>? ConnectionEstablished;
-    public event EventHandler<TcpConnection>? ConnectionClosed;
-    public event EventHandler<TcpConnection>? ConnectionError;
-
-    protected void Dispose(bool disposing)
+    public void Start()
     {
-        if (disposing) _listenSocket.Dispose();
+        Task.Run(AcceptConnectionsAsync, _listenCancel.Token);
     }
 
-    /// <summary>
-    ///     Start listening for incoming connection requests
-    /// </summary>
-    /// <param name="localEndPoint">The endpoint which the server will listening for connection requests on</param>
-    public void Start(IPEndPoint localEndPoint)
+    private async Task AcceptConnectionsAsync()
     {
-        _listenSocket = new Socket(localEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-        _listenSocket.Bind(localEndPoint);
-        _listenSocket.Listen(_backlog);
-
-        _acceptSocketAsyncEventArgs.Completed += (_, e) =>
+        _listening = true;
+        while (_listening)
         {
-            ProcessAccept(e);
-            StartAccept(e);
-        };
-        StartAccept(_acceptSocketAsyncEventArgs);
+            var socket = await _listener.AcceptAsync().ConfigureAwait(false);
+            var connection = new TcpConnection(this, socket);
+            _connections.TryAdd(connection.Id, connection);
+            connection.Start();
+
+            _logger.Information("Accepted connection {Id} from {EndPoint}", connection.Id, socket.RemoteEndPoint);
+        }
+    }
+
+    public void StopListening()
+    {
+        _listening = false;
+        _listenCancel.Cancel();
+
+        _logger.Information("Server {Id} stopped listening", _id);
     }
 
     public void Stop()
     {
-        _listenSocket.Close();
+        StopListening();
+        foreach (var connection in _connections.Values) connection.Close();
+
+        _logger.Information("Server {Id} stopped", _id);
     }
 
-    private void StartAccept(SocketAsyncEventArgs acceptEventArg)
+    internal void ConnectionClosed(TcpConnection connection)
     {
-        // socket must be cleared since the context object is being reused
-        acceptEventArg.AcceptSocket = null;
-        if (!_listenSocket.AcceptAsync(acceptEventArg)) ProcessAccept(acceptEventArg);
+        _connections.TryRemove(connection.Id, out _);
     }
 
-    private void ProcessAccept(SocketAsyncEventArgs e)
-    {
-        if (e.SocketError == SocketError.Success)
-        {
-            var connection = new TcpConnection(this, e.AcceptSocket!);
-            _connections.TryAdd(connection.Id, connection);
-        }
-
-        // accept the next connection request
-        StartAccept(e);
-    }
-
-    internal ByteBuffer GetBuffer()
+    internal ByteBuffer RentBuffer()
     {
         return _bufferPool.Rent();
     }
 
-    internal void InternalConnectionError(TcpConnection connection)
+    internal void ReturnBuffer(ByteBuffer buffer)
     {
-        ConnectionError?.Invoke(this, connection);
-    }
-
-    internal void InternalDisconnect(TcpConnection connection)
-    {
-        ConnectionClosed?.Invoke(this, connection);
-        _connections.TryRemove(connection.Id, out _);
-    }
-
-    internal void InternalConnectionEstablished(TcpConnection connection)
-    {
-        ConnectionEstablished?.Invoke(this, connection);
+        _bufferPool.Return(buffer);
     }
 }

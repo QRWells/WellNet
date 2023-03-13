@@ -54,6 +54,9 @@ public sealed class BufferPool
             return;
         }
 
+        // Already returned
+        if (!_used[item.Index]) return;
+
         // Not a pooled buffer
         if (item.Index == -1) return;
 

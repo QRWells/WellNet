@@ -1,8 +1,8 @@
-﻿using System.Buffers;
+﻿using System.Runtime.CompilerServices;
 
 namespace QRWells.WellNet.Core.Buffer;
 
-public class ByteBuffer : IMemoryOwner<byte>
+public class ByteBuffer : IDisposable
 {
     /// <summary>
     ///     The index of the buffer in the pool, invalid if not pooled
@@ -29,6 +29,7 @@ public class ByteBuffer : IMemoryOwner<byte>
     }
 
     public int Capacity { get; private set; }
+    public int Size => _writePosition - _readPosition;
     public Memory<byte> Memory { get; private set; }
 
     public void Dispose()
@@ -63,7 +64,6 @@ public class ByteBuffer : IMemoryOwner<byte>
         _readPosition = 0;
     }
 
-
     public void Reserve(long size)
     {
         if (size < Capacity) return;
@@ -72,5 +72,26 @@ public class ByteBuffer : IMemoryOwner<byte>
         Pool = null;
         Memory = new byte[size];
         Capacity = (int)size;
+    }
+
+    private void ReserveNew(int size)
+    {
+        if (size < Capacity - _writePosition) return;
+        if (size < Capacity - _readPosition) Compact();
+    }
+
+    public void Write<T>(T value) where T : unmanaged
+    {
+        var size = Unsafe.SizeOf<T>();
+        ReserveNew(size);
+        Unsafe.WriteUnaligned(ref Memory.Span[_writePosition], value);
+        _writePosition += size;
+    }
+
+    public void Write(ReadOnlySpan<byte> span)
+    {
+        ReserveNew(span.Length);
+        span.CopyTo(Memory.Span[_writePosition..]);
+        _writePosition += span.Length;
     }
 }
