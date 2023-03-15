@@ -45,6 +45,9 @@ public sealed class TcpConnection : IDisposable
         _sendBuffer.Dispose();
     }
 
+    public event Action<TcpConnection, Memory<byte>>? DataReceived;
+    public event Action<TcpConnection>? ConnectionClosed;
+
     internal void Start()
     {
         _logger.Information("Connection {Id} started", Id);
@@ -63,6 +66,8 @@ public sealed class TcpConnection : IDisposable
                 break;
             }
 
+            DataReceived?.Invoke(this, _receiveBuffer.Memory[..result]);
+
             _logger.Information("Connection {Id} received {Bytes} bytes", Id, result);
         }
     }
@@ -79,6 +84,8 @@ public sealed class TcpConnection : IDisposable
         _receiveCancel.Cancel();
         _socket.Disconnect(false);
         Connected = false;
+
+        ConnectionClosed?.Invoke(this);
 
         _logger.Information("Connection {Id} disconnected", Id);
     }

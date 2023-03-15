@@ -40,6 +40,9 @@ public sealed class TcpServer : IDisposable
         foreach (var connection in _connections.Values) connection.Dispose();
     }
 
+    public event Action<TcpConnection, Memory<byte>>? OnDataReceived;
+    public event Action<TcpConnection>? OnConnectionClosed;
+
     public void Start()
     {
         Task.Run(AcceptConnectionsAsync, _listenCancel.Token);
@@ -51,12 +54,22 @@ public sealed class TcpServer : IDisposable
         while (_listening)
         {
             var socket = await _listener.AcceptAsync().ConfigureAwait(false);
-            var connection = new TcpConnection(this, socket);
-            _connections.TryAdd(connection.Id, connection);
-            connection.Start();
-
+            var connection = CreateConnection(socket);
             _logger.Information("Accepted connection {Id} from {EndPoint}", connection.Id, socket.RemoteEndPoint);
         }
+    }
+
+    private TcpConnection CreateConnection(Socket socket)
+    {
+        var connection = new TcpConnection(this, socket);
+        connection.DataReceived += OnDataReceived;
+        connection.ConnectionClosed += OnConnectionClosed;
+        _connections.TryAdd(connection.Id, connection);
+        connection.Start();
+
+        _logger.Information("Accepted connection {Id} from {EndPoint}", connection.Id, socket.RemoteEndPoint);
+
+        return connection;
     }
 
     public void StopListening()
