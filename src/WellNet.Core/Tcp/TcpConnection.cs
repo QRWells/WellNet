@@ -1,4 +1,5 @@
-﻿using System.Net.Sockets;
+﻿using System.Collections.Concurrent;
+using System.Net.Sockets;
 using QRWells.WellNet.Core.Buffer;
 using Serilog;
 
@@ -11,8 +12,8 @@ public sealed class TcpConnection : IDisposable
     private readonly ByteBuffer _receiveBuffer;
 
     private readonly CancellationTokenSource _receiveCancel = new();
-    private readonly ByteBuffer _sendBuffer;
     private readonly CancellationTokenSource _sendCancel = new();
+    private readonly BlockingCollection<SendState> _sendQueue = new();
     private readonly TcpServer _server;
     private readonly Socket _socket;
 
@@ -24,7 +25,6 @@ public sealed class TcpConnection : IDisposable
         _server = server;
         _socket = socket;
         _receiveBuffer = _server.RentBuffer();
-        _sendBuffer = _server.RentBuffer();
     }
 
     public bool Connected { get; private set; } = true;
@@ -42,7 +42,6 @@ public sealed class TcpConnection : IDisposable
         _receiveCancel.Dispose();
         _sendCancel.Dispose();
         _receiveBuffer.Dispose();
-        _sendBuffer.Dispose();
     }
 
     public event Action<TcpConnection, Memory<byte>>? DataReceived;
@@ -52,6 +51,7 @@ public sealed class TcpConnection : IDisposable
     {
         _logger.Information("Connection {Id} started", Id);
         Task.Run(ReceiveAsync, _receiveCancel.Token);
+        Task.Run(SendAsync, _sendCancel.Token);
     }
 
     private async Task ReceiveAsync()
@@ -72,9 +72,26 @@ public sealed class TcpConnection : IDisposable
         }
     }
 
-    public async Task SendAsync(byte[] data)
+    private async Task SendAsync()
     {
-        await _socket.SendAsync(data);
+        while (!_sendQueue.IsCompleted)
+        {
+            var buffer = _sendQueue.Take(_sendCancel.Token);
+            await _socket.SendAsync(buffer.Buffer.Memory[..buffer.Buffer.Size], SocketFlags.None);
+            _server.ReturnBuffer(buffer.Buffer);
+            buffer.Args.SetResult();
+        }
+    }
+
+    public async Task SendAsync(Memory<byte> data)
+    {
+        if (!Connected) return;
+
+        var buffer = _server.RentBuffer();
+        data.CopyTo(buffer.Memory);
+        var args = new TaskCompletionSource();
+        _sendQueue.Add(new SendState(buffer, args));
+        await args.Task;
     }
 
     public void Disconnect()
@@ -102,5 +119,17 @@ public sealed class TcpConnection : IDisposable
         _server.ConnectionClosed(this);
 
         _logger.Information("Connection {Id} closed", Id);
+    }
+
+    private class SendState
+    {
+        public SendState(ByteBuffer buffer, TaskCompletionSource args)
+        {
+            Buffer = buffer;
+            Args = args;
+        }
+
+        public ByteBuffer Buffer { get; }
+        public TaskCompletionSource Args { get; }
     }
 }

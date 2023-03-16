@@ -94,4 +94,9 @@ public class ByteBuffer : IDisposable
         span.CopyTo(Memory.Span[_writePosition..]);
         _writePosition += span.Length;
     }
+
+    public void Advance(int count)
+    {
+        _writePosition += count;
+    }
 }
