@@ -13,12 +13,13 @@ public sealed class TcpConnection : IDisposable
 
     private readonly CancellationTokenSource _receiveCancel = new();
     private readonly CancellationTokenSource _sendCancel = new();
-    private readonly BlockingCollection<SendState> _sendQueue = new();
+    private readonly ConcurrentQueue<SendState> _sendQueue = new();
     private readonly TcpServer _server;
     private readonly Socket _socket;
 
     private bool _disposed;
     private bool _receiving;
+    private bool _sending;
 
     internal TcpConnection(TcpServer server, Socket socket)
     {
@@ -74,12 +75,13 @@ public sealed class TcpConnection : IDisposable
 
     private async Task SendAsync()
     {
-        while (!_sendQueue.IsCompleted)
+        _sending = true;
+        while (_sending)
         {
-            var buffer = _sendQueue.Take(_sendCancel.Token);
-            await _socket.SendAsync(buffer.Buffer.Memory[..buffer.Buffer.Size], SocketFlags.None);
-            _server.ReturnBuffer(buffer.Buffer);
-            buffer.Args.SetResult();
+            if (!_sendQueue.TryDequeue(out var state)) continue;
+            await _socket.SendAsync(state.Buffer.Memory);
+            state.Args.SetResult();
+            _server.ReturnBuffer(state.Buffer);
         }
     }
 
@@ -90,7 +92,7 @@ public sealed class TcpConnection : IDisposable
         var buffer = _server.RentBuffer();
         data.CopyTo(buffer.Memory);
         var args = new TaskCompletionSource();
-        _sendQueue.Add(new SendState(buffer, args));
+        _sendQueue.Enqueue(new SendState(buffer, args));
         await args.Task;
     }
 
@@ -98,6 +100,7 @@ public sealed class TcpConnection : IDisposable
     {
         if (!Connected) return;
         _receiving = false;
+        _sending = false;
         _receiveCancel.Cancel();
         _socket.Disconnect(false);
         Connected = false;
