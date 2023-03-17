@@ -13,6 +13,7 @@ public sealed class TcpConnection : IDisposable
 
     private readonly CancellationTokenSource _receiveCancel = new();
     private readonly CancellationTokenSource _sendCancel = new();
+    private readonly AutoResetEvent _sendEvent = new(false);
     private readonly ConcurrentQueue<SendState> _sendQueue = new();
     private readonly TcpServer _server;
     private readonly Socket _socket;
@@ -43,6 +44,7 @@ public sealed class TcpConnection : IDisposable
         _receiveCancel.Dispose();
         _sendCancel.Dispose();
         _receiveBuffer.Dispose();
+        _sendEvent.Dispose();
     }
 
     public event Action<TcpConnection, Memory<byte>>? DataReceived;
@@ -78,10 +80,26 @@ public sealed class TcpConnection : IDisposable
         _sending = true;
         while (_sending)
         {
-            if (!_sendQueue.TryDequeue(out var state)) continue;
-            await _socket.SendAsync(state.Buffer.Memory);
-            state.Args.SetResult();
-            _server.ReturnBuffer(state.Buffer);
+            _sendEvent.WaitOne();
+            while (_sendQueue.TryDequeue(out var state))
+            {
+                var buffer = state.Buffer;
+                var args = state.Args;
+                try
+                {
+                    await _socket.SendAsync(buffer.Memory);
+                    _logger.Information("Connection {Id} sent {Bytes} bytes", Id, buffer.Memory.Length);
+                }
+                catch (Exception e)
+                {
+                    _logger.Error(e, "Connection {Id} send error", Id);
+                }
+                finally
+                {
+                    _server.ReturnBuffer(buffer);
+                    args.SetResult();
+                }
+            }
         }
     }
 
@@ -93,6 +111,7 @@ public sealed class TcpConnection : IDisposable
         data.CopyTo(buffer.Memory);
         var args = new TaskCompletionSource();
         _sendQueue.Enqueue(new SendState(buffer, args));
+        _sendEvent.Set();
         await args.Task;
     }
 
@@ -122,17 +141,5 @@ public sealed class TcpConnection : IDisposable
         _server.ConnectionClosed(this);
 
         _logger.Information("Connection {Id} closed", Id);
-    }
-
-    private class SendState
-    {
-        public SendState(ByteBuffer buffer, TaskCompletionSource args)
-        {
-            Buffer = buffer;
-            Args = args;
-        }
-
-        public ByteBuffer Buffer { get; }
-        public TaskCompletionSource Args { get; }
     }
 }
