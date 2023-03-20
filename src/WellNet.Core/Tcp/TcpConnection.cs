@@ -84,11 +84,11 @@ public sealed class TcpConnection : IDisposable
             while (_sendQueue.TryDequeue(out var state))
             {
                 var buffer = state.Buffer;
-                var args = state.Args;
                 try
                 {
                     await _socket.SendAsync(buffer.Memory);
-                    _logger.Information("Connection {Id} sent {Bytes} bytes", Id, buffer.Memory.Length);
+                    _logger.Debug("Connection {Id} sent {Bytes} bytes", Id, buffer.Memory.Length);
+                    state.Args.SetResult();
                 }
                 catch (Exception e)
                 {
@@ -96,8 +96,7 @@ public sealed class TcpConnection : IDisposable
                 }
                 finally
                 {
-                    _server.ReturnBuffer(buffer);
-                    args.SetResult();
+                    state.Dispose();
                 }
             }
         }

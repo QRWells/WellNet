@@ -2,7 +2,7 @@
 
 namespace QRWells.WellNet.Core.Tcp;
 
-internal class SendState
+internal class SendState : IDisposable
 {
     public SendState(ByteBuffer buffer, TaskCompletionSource args)
     {
@@ -12,4 +12,9 @@ internal class SendState
 
     public ByteBuffer Buffer { get; }
     public TaskCompletionSource Args { get; }
+
+    public void Dispose()
+    {
+        Buffer.Dispose();
+    }
 }
