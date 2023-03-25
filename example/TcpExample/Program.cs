@@ -1,4 +1,7 @@
-﻿using QRWells.WellNet.Core.Tcp;
+﻿using QRWells.WellNet.Core.Buffer;
+using QRWells.WellNet.Core.Pipeline;
+using QRWells.WellNet.Core.Pipeline.Processor.Codec;
+using QRWells.WellNet.Core.Tcp;
 using Serilog;
 
 internal class Program
@@ -31,12 +34,10 @@ internal class Program
 
     public static void Server(string[] args)
     {
-        using var server = new TcpServer(5050);
-        server.OnDataReceived += async (connection, data) =>
-        {
-            Log.Debug("Received {Data} from {Connection}", data, connection.Id);
-            await connection.SendAsync(data);
-        };
+        using var server = new TcpServerBuilder()
+            .WithPort(5050)
+            .ConfigurePipeline(pipelineBuilder => pipelineBuilder.WithByteMessageDecoder(new EchoDecoder()))
+            .Build();
         server.Start();
         Console.ReadLine();
         Log.Information("Shutting down");
@@ -50,5 +51,20 @@ internal class Program
         await client.SendAsync("Hello World"u8.ToArray());
         client.OnDataReceived += (connection, data) => { Console.WriteLine($"Received {data} from {connection.Id}"); };
         Console.ReadLine();
+    }
+}
+
+public sealed class EchoDecoder : ByteMessageDecoder<IByteBuffer>
+{
+    protected override bool TryDecode(DecoderContext ctx, ref System.Buffers.SequenceReader<byte> reader,
+        out IByteBuffer message)
+    {
+        var bb = ctx.Pipeline.AllocateBuffer();
+
+        while (reader.TryRead(out var b))
+            bb.Write(b);
+
+        message = bb;
+        return true;
     }
 }

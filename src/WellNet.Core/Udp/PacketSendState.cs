@@ -6,7 +6,7 @@ namespace QRWells.WellNet.Core.Udp;
 
 internal sealed class PacketSendState : IDisposable
 {
-    public PacketSendState(ByteBuffer data, TaskCompletionSource args, SocketFlags flags, EndPoint endPoint)
+    public PacketSendState(IByteBuffer data, TaskCompletionSource args, SocketFlags flags, EndPoint endPoint)
     {
         Data = data;
         Args = args;
@@ -14,7 +14,7 @@ internal sealed class PacketSendState : IDisposable
         EndPoint = endPoint;
     }
 
-    public ByteBuffer Data { get; }
+    public IByteBuffer Data { get; }
     public TaskCompletionSource Args { get; }
     public SocketFlags Flags { get; }
     public EndPoint EndPoint { get; }

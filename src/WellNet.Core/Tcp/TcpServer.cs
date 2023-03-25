@@ -1,29 +1,25 @@
 ﻿using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
-using QRWells.WellNet.Core.Buffer;
+using QRWells.WellNet.Core.Pipeline;
 using Serilog;
 
 namespace QRWells.WellNet.Core.Tcp;
 
 public sealed class TcpServer : IDisposable
 {
-    private readonly BufferPool _bufferPool;
     private readonly ConcurrentDictionary<Guid, TcpConnection> _connections = new();
     private readonly Guid _id = Guid.NewGuid();
     private readonly CancellationTokenSource _listenCancel = new();
     private readonly Socket _listener;
     private readonly ILogger _logger = Log.ForContext<TcpServer>();
+    private readonly Action<PipelineBuilder> _pipelineBuilder;
 
     private bool _listening;
 
-    public TcpServer(int port) : this(new IPEndPoint(IPAddress.Any, port))
+    internal TcpServer(EndPoint endPoint, Action<PipelineBuilder> pipelineBuilder)
     {
-    }
-
-    public TcpServer(EndPoint endPoint)
-    {
-        _bufferPool = new BufferPool(1024 * 1024, 8192);
+        _pipelineBuilder = pipelineBuilder;
         _listener = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         _listener.Bind(endPoint);
         _listener.Listen(100);
@@ -40,7 +36,6 @@ public sealed class TcpServer : IDisposable
         foreach (var connection in _connections.Values) connection.Dispose();
     }
 
-    public event Action<TcpConnection, Memory<byte>>? OnDataReceived;
     public event Action<TcpConnection>? OnConnectionClosed;
 
     public void Start()
@@ -61,8 +56,7 @@ public sealed class TcpServer : IDisposable
 
     private TcpConnection CreateConnection(Socket socket)
     {
-        var connection = new TcpConnection(this, socket);
-        connection.DataReceived += OnDataReceived;
+        var connection = new TcpConnection(this, socket, _pipelineBuilder);
         connection.ConnectionClosed += OnConnectionClosed;
         _connections.TryAdd(connection.Id, connection);
         connection.Start();
@@ -91,15 +85,5 @@ public sealed class TcpServer : IDisposable
     internal void ConnectionClosed(TcpConnection connection)
     {
         _connections.TryRemove(connection.Id, out _);
-    }
-
-    internal ByteBuffer RentBuffer()
-    {
-        return _bufferPool.Rent();
-    }
-
-    internal void ReturnBuffer(ByteBuffer buffer)
-    {
-        _bufferPool.Return(buffer);
     }
 }
