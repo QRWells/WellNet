@@ -2,7 +2,7 @@
 
 namespace QRWells.WellNet.Core.Buffer;
 
-public class ByteBuffer : IDisposable
+public sealed class ByteBuffer : IByteBuffer
 {
     /// <summary>
     ///     The index of the buffer in the pool, invalid if not pooled
@@ -31,12 +31,11 @@ public class ByteBuffer : IDisposable
     public int Capacity { get; private set; }
     public int Size => _writePosition - _readPosition;
     public Memory<byte> Memory { get; private set; }
+    public Memory<byte> WrittenMemory => Memory[_readPosition.._writePosition];
 
     public void Dispose()
     {
         Release();
-
-        GC.SuppressFinalize(this);
     }
 
     /// <summary>
@@ -53,6 +52,33 @@ public class ByteBuffer : IDisposable
         _readPosition = 0;
         _writePosition = 0;
         Memory.Span.Clear();
+    }
+
+    public void Write<T>(T value) where T : unmanaged
+    {
+        var size = Unsafe.SizeOf<T>();
+        ReserveNew(size);
+        Unsafe.WriteUnaligned(ref Memory.Span[_writePosition], value);
+        _writePosition += size;
+    }
+
+    public void Write(ReadOnlySpan<byte> span)
+    {
+        ReserveNew(span.Length);
+        span.CopyTo(Memory.Span[_writePosition..]);
+        _writePosition += span.Length;
+    }
+
+    public void Read(Span<byte> span)
+    {
+        if (span.Length > Size) throw new ArgumentOutOfRangeException(nameof(span));
+        Memory.Span[_readPosition.._writePosition][..span.Length].CopyTo(span);
+        _readPosition += span.Length;
+    }
+
+    public void Advance(int count)
+    {
+        _writePosition += count;
     }
 
     public void Compact()
@@ -78,25 +104,5 @@ public class ByteBuffer : IDisposable
     {
         if (size < Capacity - _writePosition) return;
         if (size < Capacity - _readPosition) Compact();
-    }
-
-    public void Write<T>(T value) where T : unmanaged
-    {
-        var size = Unsafe.SizeOf<T>();
-        ReserveNew(size);
-        Unsafe.WriteUnaligned(ref Memory.Span[_writePosition], value);
-        _writePosition += size;
-    }
-
-    public void Write(ReadOnlySpan<byte> span)
-    {
-        ReserveNew(span.Length);
-        span.CopyTo(Memory.Span[_writePosition..]);
-        _writePosition += span.Length;
-    }
-
-    public void Advance(int count)
-    {
-        _writePosition += count;
     }
 }
