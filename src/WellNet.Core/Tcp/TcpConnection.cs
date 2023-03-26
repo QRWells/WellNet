@@ -75,8 +75,6 @@ public sealed class TcpConnection : IDisposable
                 break;
             }
 
-            // DataReceived?.Invoke(this, _receiveBuffer.Memory[..result]);
-
             _logger.Information("Connection {Id} received {Bytes} bytes", Id, result);
 
             _inboundWriter.Advance(result); // Inform the PipeWriter how much was read from the Socket
