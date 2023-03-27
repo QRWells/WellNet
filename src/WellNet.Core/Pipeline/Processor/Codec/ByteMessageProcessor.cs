@@ -1,5 +1,6 @@
 ﻿using System.Buffers;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using QRWells.WellNet.Core.Buffer;
 
 namespace QRWells.WellNet.Core.Pipeline.Processor.Codec;
@@ -21,7 +22,8 @@ public abstract class ByteMessageDecoder<TMessage> : IByteMessageDecoder
         return false;
     }
 
-    protected abstract bool TryDecode(DecoderContext ctx, ref SequenceReader<byte> reader, out TMessage message);
+    protected abstract bool TryDecode(DecoderContext ctx, ref SequenceReader<byte> reader,
+        [NotNullWhen(true)] out TMessage? message);
 }
 
 public abstract class ByteMessageEncoder<TMessage> : IByteMessageEncoder

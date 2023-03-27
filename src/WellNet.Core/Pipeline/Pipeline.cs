@@ -82,9 +82,11 @@ public sealed class Pipeline
             var buffer = result.Buffer;
             if (result.IsCanceled || result.IsCompleted) break;
 
-            if (!ByteMessageDecoder.TryDecode(buffer, out var message, out var consumed)) continue;
-
+            var decoded = ByteMessageDecoder.TryDecode(buffer, out var message, out var consumed);
+            // maybe partial consumed, so we need to advance to the consumed position
             _inboundReader.AdvanceTo(buffer.GetPosition(consumed));
+
+            if (!decoded) continue;
 
             if (_head == null) // there is no message processor
             {
