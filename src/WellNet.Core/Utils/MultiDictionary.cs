@@ -1,4 +1,6 @@
-﻿namespace QRWells.WellNet.Core.Utils;
+﻿using System.Text;
+
+namespace QRWells.WellNet.Core.Utils;
 
 public class MultiDictionary : Dictionary<string, List<string>>
 {
@@ -39,5 +41,16 @@ public class MultiDictionary : Dictionary<string, List<string>>
 
         values = null;
         return false;
+    }
+
+    public override string ToString()
+    {
+        var sb = new StringBuilder();
+        foreach (var (key, value) in this)
+        {
+            sb.AppendLine($"{key}: {string.Join(", ", value)}");
+        }
+
+        return sb.ToString();
     }
 }
