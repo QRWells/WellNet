@@ -1,7 +1,6 @@
 ﻿using System.IO.Pipelines;
 using QRWells.WellNet.Core.Pipeline.Processor;
 using QRWells.WellNet.Core.Pipeline.Processor.Codec;
-using QRWells.WellNet.Core.Tcp;
 
 namespace QRWells.WellNet.Core.Pipeline;
 
@@ -9,9 +8,9 @@ public sealed class PipelineBuilder
 {
     private readonly Pipeline _pipeline;
 
-    internal PipelineBuilder(PipeReader inbound, PipeWriter outbound, TcpConnection connection)
+    internal PipelineBuilder(PipeReader inbound, PipeWriter outbound)
     {
-        _pipeline = new Pipeline(inbound, outbound, connection);
+        _pipeline = new Pipeline(inbound, outbound);
     }
 
     public PipelineBuilder WithByteMessageDecoder<T>(ByteMessageDecoder<T> decoder)

@@ -2,6 +2,7 @@
 
 public interface IBufferPool
 {
-    public IByteBuffer Rent();
-    public void Return(ByteBuffer item, bool clear = true);
+    public static IBufferPool Default => FixedBufferPool.Default;
+    public IByteBuffer Rent(int sizeHint = 0);
+    public void Return(IPoolingBuffer buffer, bool clear = true);
 }

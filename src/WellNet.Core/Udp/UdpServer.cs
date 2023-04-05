@@ -9,7 +9,7 @@ namespace QRWells.WellNet.Core.Udp;
 public sealed class UdpServer : IDisposable
 {
     private readonly byte[] _buffer = new byte[8192];
-    private readonly BufferPool _bufferPool = new(1024 * 1024, 8192);
+    private readonly IBufferPool _bufferPool = IBufferPool.Default;
     private readonly ILogger _logger = Log.ForContext<UdpServer>();
     private readonly CancellationTokenSource _receiveCancel = new();
     private readonly CancellationTokenSource _sendCancel = new();

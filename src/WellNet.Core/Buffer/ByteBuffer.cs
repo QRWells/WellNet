@@ -1,108 +1,236 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Buffers.Binary;
+using System.Diagnostics;
 
 namespace QRWells.WellNet.Core.Buffer;
 
-public sealed class ByteBuffer : IByteBuffer
+public class ByteBuffer : IByteBuffer
 {
-    /// <summary>
-    ///     The index of the buffer in the pool, invalid if not pooled
-    /// </summary>
-    internal readonly int Index;
-
-    private int _readPosition;
-    private int _writePosition;
-
-    internal BufferPool? Pool;
-
-    internal ByteBuffer(BufferPool pool, int index, Memory<byte> buffer)
-    {
-        Memory = buffer;
-        Pool = pool;
-        Index = index;
-        Capacity = buffer.Length;
-    }
-
     public ByteBuffer(int capacity)
     {
         Memory = new byte[capacity];
         Capacity = capacity;
     }
 
-    public int Capacity { get; private set; }
-    public int Size => _writePosition - _readPosition;
-    public Memory<byte> Memory { get; private set; }
-    public Memory<byte> WrittenMemory => Memory[_readPosition.._writePosition];
-
-    public void Dispose()
+    internal ByteBuffer(Memory<byte> memory)
     {
-        Release();
+        Memory = memory;
+        Capacity = memory.Length;
     }
 
-    /// <summary>
-    ///     Returns the buffer to the pool it belongs to. (if it is pooled)
-    /// </summary>
-    /// <param name="clear">Whether to clear the buffer before returning it to the pool</param>
-    public void Release(bool clear = true)
+    public Endian Endian { get; set; } = Endian.Little;
+    public int Capacity { get; }
+
+    public int ReadIndex { get; set; }
+    public int WriteIndex { get; set; }
+    public int Size => WriteIndex - ReadIndex;
+    public Memory<byte> Memory { get; }
+    public Memory<byte> ReadableMemory => Memory[ReadIndex..WriteIndex];
+    public Memory<byte> WritableMemory => Memory[WriteIndex..];
+
+    public virtual void Dispose()
     {
-        Pool?.Return(this, clear);
+        GC.SuppressFinalize(this);
     }
 
     public void Clear()
     {
-        _readPosition = 0;
-        _writePosition = 0;
+        ReadIndex = 0;
+        WriteIndex = 0;
         Memory.Span.Clear();
-    }
-
-    public void Write<T>(T value) where T : unmanaged
-    {
-        var size = Unsafe.SizeOf<T>();
-        ReserveNew(size);
-        Unsafe.WriteUnaligned(ref Memory.Span[_writePosition], value);
-        _writePosition += size;
-    }
-
-    public void Write(ReadOnlySpan<byte> span)
-    {
-        ReserveNew(span.Length);
-        span.CopyTo(Memory.Span[_writePosition..]);
-        _writePosition += span.Length;
-    }
-
-    public void Read(Span<byte> span)
-    {
-        if (span.Length > Size) throw new ArgumentOutOfRangeException(nameof(span));
-        Memory.Span[_readPosition.._writePosition][..span.Length].CopyTo(span);
-        _readPosition += span.Length;
     }
 
     public void Advance(int count)
     {
-        _writePosition += count;
+        Debug.Assert(count <= Size);
+        ReadIndex += count;
+    }
+
+    public void Rewind(int count)
+    {
+        Debug.Assert(count <= ReadIndex);
+        ReadIndex -= count;
+    }
+
+    internal void BytesWritten(int count)
+    {
+        WriteIndex += count;
     }
 
     public void Compact()
     {
-        if (_readPosition == 0) return;
+        if (ReadIndex == 0) return;
         var span = Memory.Span;
-        span.Slice(_readPosition, _writePosition - _readPosition).CopyTo(span);
-        _writePosition -= _readPosition;
-        _readPosition = 0;
+        span.Slice(ReadIndex, WriteIndex - ReadIndex).CopyTo(span);
+        WriteIndex -= ReadIndex;
+        ReadIndex = 0;
     }
 
-    public void Reserve(long size)
+    private void Reserve(int size)
     {
-        if (size < Capacity) return;
-        // TODO: Implement a better way to resize the buffer
-        Release();
-        Pool = null;
-        Memory = new byte[size];
-        Capacity = (int)size;
+        if (size < Capacity - WriteIndex) return;
+        if (size < Capacity - ReadIndex) Compact();
     }
 
-    private void ReserveNew(int size)
+    #region Write
+
+    public void WriteByte(byte value)
     {
-        if (size < Capacity - _writePosition) return;
-        if (size < Capacity - _readPosition) Compact();
+        Reserve(1);
+        Memory.Span[WriteIndex] = value;
+        WriteIndex++;
     }
+
+    public void WriteShort(short value)
+    {
+        Reserve(2);
+        if (Endian == Endian.Little)
+            BinaryPrimitives.WriteInt16LittleEndian(Memory.Span[WriteIndex..], value);
+        else
+            BinaryPrimitives.WriteInt16BigEndian(Memory.Span[WriteIndex..], value);
+    }
+
+    public void WriteInt(int value)
+    {
+        Reserve(4);
+        if (Endian == Endian.Little)
+            BinaryPrimitives.WriteInt32LittleEndian(Memory.Span[WriteIndex..], value);
+        else
+            BinaryPrimitives.WriteInt32BigEndian(Memory.Span[WriteIndex..], value);
+    }
+
+    public void WriteLong(long value)
+    {
+        Reserve(8);
+        if (Endian == Endian.Little)
+            BinaryPrimitives.WriteInt64LittleEndian(Memory.Span[WriteIndex..], value);
+        else
+            BinaryPrimitives.WriteInt64BigEndian(Memory.Span[WriteIndex..], value);
+    }
+
+    public void WriteFloat(float value)
+    {
+        Reserve(4);
+        if (Endian == Endian.Little)
+            BinaryPrimitives.WriteSingleLittleEndian(Memory.Span[WriteIndex..], value);
+        else
+            BinaryPrimitives.WriteSingleBigEndian(Memory.Span[WriteIndex..], value);
+    }
+
+    public void WriteDouble(double value)
+    {
+        Reserve(8);
+        if (Endian == Endian.Little)
+            BinaryPrimitives.WriteDoubleLittleEndian(Memory.Span[WriteIndex..], value);
+        else
+            BinaryPrimitives.WriteDoubleBigEndian(Memory.Span[WriteIndex..], value);
+    }
+
+    public void Write(ReadOnlySpan<byte> span)
+    {
+        Reserve(span.Length);
+        span.CopyTo(Memory.Span[WriteIndex..]);
+        WriteIndex += span.Length;
+    }
+
+    #endregion
+
+    #region Read
+
+    public bool TryReadByte(out byte value)
+    {
+        if (ReadIndex + 1 > WriteIndex)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Memory.Span[ReadIndex];
+        ReadIndex++;
+        return true;
+    }
+
+    public bool TryReadShort(out short value)
+    {
+        if (ReadIndex + 2 > WriteIndex)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Endian == Endian.Little
+            ? BinaryPrimitives.ReadInt16LittleEndian(Memory.Span[ReadIndex..])
+            : BinaryPrimitives.ReadInt16BigEndian(Memory.Span[ReadIndex..]);
+        ReadIndex += 2;
+        return true;
+    }
+
+    public bool TryReadInt(out int value)
+    {
+        if (ReadIndex + 4 > WriteIndex)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Endian == Endian.Little
+            ? BinaryPrimitives.ReadInt32LittleEndian(Memory.Span[ReadIndex..])
+            : BinaryPrimitives.ReadInt32BigEndian(Memory.Span[ReadIndex..]);
+        ReadIndex += 4;
+        return true;
+    }
+
+    public bool TryReadLong(out long value)
+    {
+        if (ReadIndex + 8 > WriteIndex)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Endian == Endian.Little
+            ? BinaryPrimitives.ReadInt64LittleEndian(Memory.Span[ReadIndex..])
+            : BinaryPrimitives.ReadInt64BigEndian(Memory.Span[ReadIndex..]);
+        ReadIndex += 8;
+        return true;
+    }
+
+    public bool TryReadFloat(out float value)
+    {
+        if (ReadIndex + 4 > WriteIndex)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Endian == Endian.Little
+            ? BinaryPrimitives.ReadSingleLittleEndian(Memory.Span[ReadIndex..])
+            : BinaryPrimitives.ReadSingleBigEndian(Memory.Span[ReadIndex..]);
+        ReadIndex += 4;
+        return true;
+    }
+
+    public bool TryReadDouble(out double value)
+    {
+        if (ReadIndex + 8 > WriteIndex)
+        {
+            value = default;
+            return false;
+        }
+
+        value = Endian == Endian.Little
+            ? BinaryPrimitives.ReadDoubleLittleEndian(Memory.Span[ReadIndex..])
+            : BinaryPrimitives.ReadDoubleBigEndian(Memory.Span[ReadIndex..]);
+        ReadIndex += 8;
+        return true;
+    }
+
+    public int Read(Span<byte> span)
+    {
+        var count = Math.Min(span.Length, Size);
+        Memory.Span[ReadIndex..(ReadIndex + count)].CopyTo(span);
+        ReadIndex += count;
+        return count;
+    }
+
+    #endregion
 }

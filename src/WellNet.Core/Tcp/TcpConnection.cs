@@ -30,7 +30,7 @@ public sealed class TcpConnection : IDisposable
         var outboundPipe = new Pipe();
         _inboundWriter = inboundPipe.Writer;
         _outboundReader = outboundPipe.Reader;
-        var builder = new PipelineBuilder(inboundPipe.Reader, outboundPipe.Writer, this);
+        var builder = new PipelineBuilder(inboundPipe.Reader, outboundPipe.Writer);
         pipelineBuilder(builder);
         _pipeline = builder.Build();
     }
@@ -74,8 +74,6 @@ public sealed class TcpConnection : IDisposable
                 _logger.Information("Connection {Id} closed", Id);
                 break;
             }
-
-            // DataReceived?.Invoke(this, _receiveBuffer.Memory[..result]);
 
             _logger.Information("Connection {Id} received {Bytes} bytes", Id, result);
 

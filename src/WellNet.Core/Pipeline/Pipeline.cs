@@ -3,15 +3,12 @@ using System.IO.Pipelines;
 using System.Text;
 using QRWells.WellNet.Core.Buffer;
 using QRWells.WellNet.Core.Pipeline.Processor;
-using QRWells.WellNet.Core.Tcp;
 
 namespace QRWells.WellNet.Core.Pipeline;
 
 public sealed class Pipeline
 {
-    private readonly BufferPool _bufferPool = new(256 * 256, 256);
-
-    private readonly TcpConnection _connection;
+    private readonly IBufferPool _bufferPool = IBufferPool.Default;
 
     private readonly CancellationTokenSource _inboundCancel = new();
 
@@ -28,9 +25,8 @@ public sealed class Pipeline
     private PipelineContext? _tail;
     internal DecoderContext ByteMessageDecoder;
 
-    internal Pipeline(PipeReader inbound, PipeWriter outbound, TcpConnection connection)
+    internal Pipeline(PipeReader inbound, PipeWriter outbound)
     {
-        _connection = connection;
         _inboundReader = inbound;
         _outboundWriter = outbound;
     }
@@ -43,7 +39,7 @@ public sealed class Pipeline
 
     public void Write(object message)
     {
-        if (message is ByteBuffer byteBuffer)
+        if (message is IByteBuffer byteBuffer)
         {
             _outboundQueue.Enqueue(byteBuffer);
             return;
@@ -82,9 +78,11 @@ public sealed class Pipeline
             var buffer = result.Buffer;
             if (result.IsCanceled || result.IsCompleted) break;
 
-            if (!ByteMessageDecoder.TryDecode(buffer, out var message, out var consumed)) continue;
-
+            var decoded = ByteMessageDecoder.TryDecode(buffer, out var message, out var consumed);
+            // maybe partial consumed, so we need to advance to the consumed position
             _inboundReader.AdvanceTo(buffer.GetPosition(consumed));
+
+            if (!decoded) continue;
 
             if (_head == null) // there is no message processor
             {
@@ -107,7 +105,7 @@ public sealed class Pipeline
 
             while (_outboundQueue.TryDequeue(out var buffer))
             {
-                var res = await _outboundWriter.WriteAsync(buffer.WrittenMemory);
+                var res = await _outboundWriter.WriteAsync(buffer.ReadableMemory);
                 if (res.IsCanceled || res.IsCompleted)
                 {
                     error = true;
