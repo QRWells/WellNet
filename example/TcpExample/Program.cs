@@ -1,4 +1,5 @@
-﻿using QRWells.WellNet.Core.Buffer;
+﻿using System.Buffers;
+using QRWells.WellNet.Core.Buffer;
 using QRWells.WellNet.Core.Pipeline;
 using QRWells.WellNet.Core.Pipeline.Processor.Codec;
 using QRWells.WellNet.Core.Tcp;
@@ -48,21 +49,22 @@ internal class Program
     {
         using var client = new TcpClient();
         await client.ConnectAsync("localhost", 5050);
-        await client.SendAsync("Hello World"u8.ToArray());
-        client.OnDataReceived += (connection, data) => { Console.WriteLine($"Received {data} from {connection.Id}"); };
+        client.Send("Hello World"u8.ToArray());
+        client.OnDataReceived +=
+            (connection, data) => { Console.WriteLine($"Received {data} from {connection.Id}"); };
         Console.ReadLine();
     }
 }
 
 public sealed class EchoDecoder : ByteMessageDecoder<IByteBuffer>
 {
-    protected override bool TryDecode(DecoderContext ctx, ref System.Buffers.SequenceReader<byte> reader,
+    protected override bool TryDecode(DecoderContext ctx, ref SequenceReader<byte> reader,
         out IByteBuffer message)
     {
         var bb = ctx.Pipeline.AllocateBuffer();
 
         while (reader.TryRead(out var b))
-            bb.Write(b);
+            bb.WriteByte(b);
 
         message = bb;
         return true;

@@ -1,5 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using QRWells.WellNet.Core.Buffer;
 
@@ -7,45 +6,19 @@ namespace QRWells.WellNet.Core.Tcp;
 
 public sealed class TcpClient : IDisposable
 {
-    private readonly BufferPool _bufferPool = new(1024 * 1024, 8192);
-    private readonly ByteBuffer _receiveBuffer = new(16 * 1024);
-    private readonly CancellationTokenSource _receiveCancel = new();
-    private readonly CancellationTokenSource _sendCancel = new();
-    private readonly AutoResetEvent _sendEvent = new(false);
-    private readonly ConcurrentQueue<SendState> _sendQueue = new();
-    private readonly TcpServer? _server;
-    private readonly Socket _socket;
-    private EndPoint _endPoint;
-    private bool _receiving;
-    private bool _sending;
-
-    public TcpClient()
-    {
-        _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-    }
-
-    public TcpClient(string host, int port) : this(new IPEndPoint(IPAddress.Parse(host), port))
-    {
-    }
-
-    public TcpClient(EndPoint endPoint)
-    {
-        _socket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-        _endPoint = endPoint;
-    }
-
-    internal TcpClient(TcpServer server, Socket socket)
-    {
-        _server = server;
-        _socket = socket;
-    }
+    /// <summary>
+    ///     The minimum amount of data that needs to be in the receive buffer before it is passed to the pipeline
+    /// </summary>
+    public int ReceiveThreshold { get; set; } = 1024;
 
     public Guid Id { get; } = Guid.NewGuid();
-    public bool CreatedByServer => _server != null;
+
     public bool Connected => _socket.Connected;
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _receiveCancel.Dispose();
         _sendCancel.Dispose();
         _sendEvent.Dispose();
@@ -77,28 +50,38 @@ public sealed class TcpClient : IDisposable
         _ = Task.Run(SendLoopAsync, _sendCancel.Token);
     }
 
-    public async Task SendAsync(ReadOnlyMemory<byte> data)
+    public void Send(ReadOnlyMemory<byte> data)
     {
         if (!Connected) return;
-
-        var buffer = _bufferPool.Rent();
-        data.CopyTo(buffer.Memory);
-        var state = new SendState(buffer, new TaskCompletionSource());
-        _sendQueue.Enqueue(state);
-        _sendEvent.Set();
-        await state.Args.Task;
+        lock (_sendBuffer)
+        {
+            _sendBuffer.Write(data.Span);
+            _sendEvent.Set();
+        }
     }
 
     private async Task ReceiveLoopAsync()
     {
         _receiving = true;
+        var bytesReceived = 0;
         while (_receiving)
         {
-            var result = await _socket.ReceiveAsync(_receiveBuffer.Memory);
+            var result = await _socket.ReceiveAsync(_receiveBuffer.WritableMemory);
 
             if (result != 0)
             {
-                OnDataReceived?.Invoke(this, _receiveBuffer.Memory[..result]);
+                _receiveBuffer.BytesWritten(result);
+                bytesReceived += result;
+                if (bytesReceived < ReceiveThreshold) continue; // Wait for more data
+                if (OnDataReceived == null)
+                {
+                    _receiveBuffer.Clear(); // Clear the buffer if there is no handler
+                    continue;
+                }
+
+                OnDataReceived.Invoke(this, _receiveBuffer.ReadableMemory);
+                bytesReceived = 0;
+                _receiveBuffer.Compact();
                 continue;
             }
 
@@ -115,10 +98,11 @@ public sealed class TcpClient : IDisposable
         {
             _sendEvent.WaitOne();
 
-            while (_sendQueue.TryDequeue(out var state))
+            while (_sendBuffer.Size > 0)
             {
-                await _socket.SendAsync(state.Buffer.Memory);
-                state.Args.SetResult();
+                var result = await _socket.SendAsync(_sendBuffer.ReadableMemory);
+                _sendBuffer.Advance(result);
+                _sendBuffer.Compact();
             }
         }
     }
@@ -128,4 +112,52 @@ public sealed class TcpClient : IDisposable
         if (!Connected) return;
         await _socket.DisconnectAsync(false);
     }
+
+    #region signals
+
+    private readonly CancellationTokenSource _receiveCancel = new();
+    private readonly CancellationTokenSource _sendCancel = new();
+    private readonly AutoResetEvent _sendEvent = new(false);
+    private bool _receiving;
+    private bool _sending;
+
+    #endregion
+
+    #region socket info
+
+    private readonly Socket _socket;
+    private EndPoint _endPoint;
+    private bool _disposed;
+
+    #endregion
+
+    #region buffers
+
+    private readonly ByteBuffer _receiveBuffer = new(16 * 1024);
+    private readonly ByteBuffer _sendBuffer = new(16 * 1024);
+
+    #endregion
+
+    #region Tasks
+
+    #endregion
+
+    #region Constructors
+
+    public TcpClient()
+    {
+        _socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+    }
+
+    public TcpClient(string host, int port) : this(new IPEndPoint(IPAddress.Parse(host), port))
+    {
+    }
+
+    public TcpClient(EndPoint endPoint)
+    {
+        _socket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        _endPoint = endPoint;
+    }
+
+    #endregion
 }
